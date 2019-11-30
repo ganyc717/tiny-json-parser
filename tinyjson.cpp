@@ -291,6 +291,11 @@ namespace TinyJson
                 res.value.push_back(parse_array(s));
             else if(current_char == '{')
                 res.value.push_back(parse_object(s));
+            else if(current_char == ']')
+            {
+                current_char = s.pop_front();
+                return nodes.addObject(std::move(res));
+            }
             else
                 assert(0);
 
@@ -304,7 +309,7 @@ namespace TinyJson
                 return nodes.addObject(std::move(res));
             }
             assert(current_char == ',');
-            s.strip();
+            s = s.strip();
             current_char = s.pop_front();
         }
         assert(0);
@@ -454,30 +459,21 @@ namespace TinyJson
 using namespace TinyJson;
 int main()
 {
-    const char* jsonstring = "\
-    {\
-        \"name\":\"AAA\",\
-        \"age\" : 99,\
-        \"data\" : [\
-        {\
-            \"salary\": 10.1e12,\
-            \"test_bool\" : true,\
-            \"obj\" : {\
-                \"a\":\"1111\",\
-                \"b\":222\
-            }\
-        }\
-    ]\
-    }\
-    ";
-
+    ifstream fi;
+    fi.open("test.json", ios::in);
+    string test;
+    char ch;
+    while(fi.get(ch))
+        test += ch;
+    fi.close();
     JsonParser p;
-    auto obj = p.parse(jsonstring);
+    auto obj = p.parse(test.c_str());
+
     string output = obj->visit();
-    ofstream f;
-    f.open("test", ios::out);
-    f << output;
-    f.close();
+    ofstream fo;
+    fo.open("test", ios::out);
+    fo << output;
+    fo.close();
     return 0;
     
 }
