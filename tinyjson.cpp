@@ -1,6 +1,6 @@
 #include<string>
 #include<vector>
-#include<unordered_map>
+#include<map>
 #include<iostream>
 #include<assert.h>
 #include<stdio.h>
@@ -9,6 +9,7 @@
 #include<fstream>
 #include<list>
 #include<set>
+#include<memory>
 
 namespace TinyJson
 {
@@ -27,7 +28,6 @@ namespace TinyJson
             uint32_t len();
             char pop_front();
             CCharArray strip();
-            char operator[](uint32_t index);
             char operator[](uint32_t index) const;
 
         private:
@@ -93,12 +93,6 @@ namespace TinyJson
         return std::max<uint32_t>(end - start, 0);
     }
 
-    char CCharArray::operator[](uint32_t index)
-    {
-        assert(index < end - start);
-        return raw[start + index];
-    }
-
     char CCharArray::operator[](uint32_t index) const
     {
         assert(index < end - start);
@@ -134,6 +128,7 @@ namespace TinyJson
         JsonType type;
         virtual string visit() = 0;
         void* get() {return (void*)(this);};
+        bool operator<(JsonBase& b) {return get() < b.get();};
     };
     #define DEFINE_JSON_TYPE(classname, value_type, json_type)\
     struct classname : JsonBase\
@@ -143,13 +138,13 @@ namespace TinyJson
         classname(){type = json_type;};\
     }
 
-    using jsonmap = unordered_map<void*, void*>;
+    using jsonmap = vector<pair<string, shared_ptr<JsonBase>> >;
     DEFINE_JSON_TYPE(JsonString, string, JSON_STRING);
     DEFINE_JSON_TYPE(JsonNumber, double, JSON_NUMBER);
     DEFINE_JSON_TYPE(JsonNull, string, JSON_NULL);
     DEFINE_JSON_TYPE(JsonBoolean, bool, JSON_BOOLEAN);
     DEFINE_JSON_TYPE(JsonObject, jsonmap, JSON_OBJECT);
-    DEFINE_JSON_TYPE(JsonArray, vector<void*>, JSON_ARRAY);
+    DEFINE_JSON_TYPE(JsonArray, vector<shared_ptr<JsonBase>>, JSON_ARRAY);
 
     string JsonString::visit()
     {
@@ -181,11 +176,11 @@ namespace TinyJson
         string res = "{ ";
         for(auto it = value.begin(); it != value.end(); it++)
         {
-            void* k = it->first;
-            void* v = it->second;
-            res += ((JsonBase*)k)->visit();
+            string k = it->first;
+            auto v = it->second;
+            res += k;
             res += " : ";
-            res += ((JsonBase*)v)->visit();
+            res += v->visit();
             if(std::next(it) != value.end())
                 res += ", ";
         }
@@ -198,8 +193,7 @@ namespace TinyJson
         string res = "[ ";
         for(auto it = value.begin(); it != value.end(); it++)
         {
-            void* p = *it;
-            res += ((JsonBase*)p)->visit();
+            res += (*it)->visit();
             if(std::next(it) != value.end())
                 res += ", ";
         }
@@ -207,52 +201,21 @@ namespace TinyJson
         return res;
     }
 
-    #define ADD_OBJ(nodes_list, ret_t) {nodes_list.push_front(obj);\
-        return static_cast<ret_t*>(nodes_list.begin()->get());}
-    struct NodeManager
-    {
-        JsonString* addObject(JsonString obj) ADD_OBJ(stringNodes, JsonString);
-        JsonNumber* addObject(JsonNumber obj) ADD_OBJ(numberNodes, JsonNumber);
-        JsonNull* addObject(JsonNull obj) ADD_OBJ(nullNodes, JsonNull);
-        JsonBoolean* addObject(JsonBoolean obj) ADD_OBJ(boolNodes, JsonBoolean);
-        JsonObject* addObject(JsonObject obj) ADD_OBJ(objNodes, JsonObject);
-        JsonArray* addObject(JsonArray obj) ADD_OBJ(arrayNodes, JsonArray);
-
-        void clear();
-        private:
-            list<JsonString> stringNodes;
-            list<JsonNumber> numberNodes;
-            list<JsonNull> nullNodes;
-            list<JsonBoolean> boolNodes;
-            list<JsonObject> objNodes;
-            list<JsonArray> arrayNodes;
-    };
-    void NodeManager::clear()
-    {
-        stringNodes.clear();
-        numberNodes.clear();
-        nullNodes.clear();
-        boolNodes.clear();
-        objNodes.clear();
-        arrayNodes.clear();
-    }
-
     class JsonParser
     {
         public:
             JsonObject* parse(const char* s);
         protected:
-            JsonObject* parse_object(CCharArray& s);
-            JsonString* parse_string(CCharArray& s);
-            JsonNull* parse_null(CCharArray& s);
-            JsonBoolean* parse_bool(CCharArray& s);
-            JsonArray* parse_array(CCharArray& s);
-            JsonNumber* parse_number(CCharArray& s);
+            shared_ptr<JsonBase> parse_object(CCharArray& s);
+            shared_ptr<JsonBase> parse_string(CCharArray& s);
+            shared_ptr<JsonBase> parse_null(CCharArray& s);
+            shared_ptr<JsonBase> parse_bool(CCharArray& s);
+            shared_ptr<JsonBase> parse_array(CCharArray& s);
+            shared_ptr<JsonBase> parse_number(CCharArray& s);
 
         private:
-            JsonObject* root;
+            shared_ptr<JsonBase> root;
             CCharArray raw_input;
-            NodeManager nodes;
             char current_char;
 
     };
@@ -261,72 +224,33 @@ namespace TinyJson
     {
         raw_input = CCharArray(s);
         raw_input = raw_input.strip();
-        nodes.clear();
-        root = nullptr;
+        root.reset();
+
         if(raw_input.len() == 0)
-            return nullptr;
+            return dynamic_cast<JsonObject*>(root.get());
         // First one should be object
         current_char = raw_input.pop_front();
         assert(current_char == '{');
         root = parse_object(raw_input);
-        return root;
+        return dynamic_cast<JsonObject*>(root.get());
     }
-    JsonArray* JsonParser::parse_array(CCharArray& s)
-    {
-        JsonArray res;
-        assert(current_char == '[');
-        s = s.strip();
-        current_char = s.pop_front();
-        while(s.len() > 0)
-        {
-            if(current_char == '\"')
-                res.value.push_back(parse_string(s));
-            else if(current_char == 't' || current_char == 'f')
-                res.value.push_back(parse_bool(s));
-            else if(current_char == 'n')
-                res.value.push_back(parse_null(s));
-            else if(current_char == '-' || isdigit(current_char))
-                res.value.push_back(parse_number(s));
-            else if(current_char == '[')
-                res.value.push_back(parse_array(s));
-            else if(current_char == '{')
-                res.value.push_back(parse_object(s));
-            else if(current_char == ']')
-            {
-                current_char = s.pop_front();
-                return nodes.addObject(std::move(res));
-            }
-            else
-                assert(0);
 
-            while(isspace(current_char) && s.len() > 0)
-            {
-                current_char = s.pop_front();
-            }
-            if(current_char == ']')
-            {
-                current_char = s.pop_front();
-                return nodes.addObject(std::move(res));
-            }
-            assert(current_char == ',');
-            s = s.strip();
-            current_char = s.pop_front();
-        }
-        assert(0);
-        return nullptr;
-    }
-    JsonObject* JsonParser::parse_object(CCharArray& s)
+    shared_ptr<JsonBase> JsonParser::parse_object(CCharArray& s)
     {
-        JsonObject res;
+        JsonObject* res = new JsonObject;
         assert(current_char == '{');
         s = s.strip();
         current_char = s.pop_front();
+        if(current_char == '}')
+        {
+            return shared_ptr<JsonBase>(res);
+        }
 
         while(current_char != EOF)
         {
             assert(current_char == '\"');
-            void* key = parse_string(s);
-            void* value = nullptr;
+            string key = (dynamic_cast<JsonString*>(parse_string(s).get()))->value;
+            shared_ptr<JsonBase> value;
             while(isspace(current_char) && s.len() > 0)
             {
                 current_char = s.pop_front();
@@ -348,7 +272,9 @@ namespace TinyJson
                 value = parse_object(s);
             else
                 assert(0);
-            res.value[key] = value;
+            auto pair_obj = pair<string, shared_ptr<JsonBase> >(key, value);
+            res->value.push_back(std::move(pair_obj));
+
             while(isspace(current_char) && s.len() > 0)
             {
                 current_char = s.pop_front();
@@ -356,21 +282,66 @@ namespace TinyJson
             if(current_char == '}')
             {
                 current_char = s.pop_front();
-                return nodes.addObject(std::move(res));
+                return shared_ptr<JsonBase>(res);
             }
             assert(current_char == ',');
             s = s.strip();
             current_char = s.pop_front();
         }
         assert(0);
-        return nullptr;
+        return shared_ptr<JsonBase>(res);
     }
-    JsonNumber* JsonParser::parse_number(CCharArray& s)
+
+    shared_ptr<JsonBase> JsonParser::parse_array(CCharArray& s)
+    {
+        JsonArray* res = new JsonArray;
+        assert(current_char == '[');
+        s = s.strip();
+        current_char = s.pop_front();
+        while(s.len() > 0)
+        {
+            if(current_char == '\"')
+                res->value.push_back(parse_string(s));
+            else if(current_char == 't' || current_char == 'f')
+                res->value.push_back(parse_bool(s));
+            else if(current_char == 'n')
+                res->value.push_back(parse_null(s));
+            else if(current_char == '-' || isdigit(current_char))
+                res->value.push_back(parse_number(s));
+            else if(current_char == '[')
+                res->value.push_back(parse_array(s));
+            else if(current_char == '{')
+                res->value.push_back(parse_object(s));
+            else if(current_char == ']')
+            {
+                current_char = s.pop_front();
+                return shared_ptr<JsonBase>(res);
+            }
+            else
+                assert(0);
+
+            while(isspace(current_char) && s.len() > 0)
+            {
+                current_char = s.pop_front();
+            }
+            if(current_char == ']')
+            {
+                current_char = s.pop_front();
+                return shared_ptr<JsonBase>(res);
+            }
+            assert(current_char == ',');
+            s = s.strip();
+            current_char = s.pop_front();
+        }
+        assert(0);
+        return shared_ptr<JsonBase>(res);
+    }
+
+    shared_ptr<JsonBase> JsonParser::parse_number(CCharArray& s)
     {
         ostringstream os;
-        JsonNumber res;
+        JsonNumber* res = new JsonNumber;
         assert(current_char == '-' || isdigit(current_char));
-        os<<current_char;
         set<char> special = {'+', '-', '.', 'e'};
         // we do not check whether the number is illegal here
         while(current_char != EOF && (isdigit(current_char) || (special.find(current_char) != special.end())))
@@ -379,13 +350,13 @@ namespace TinyJson
             current_char = s.pop_front();
         }
         istringstream in(os.str());
-        in >> res.value;
-        return nodes.addObject(std::move(res));
+        in >> res->value;
+        return shared_ptr<JsonBase>(res);
     }
-    JsonBoolean* JsonParser::parse_bool(CCharArray& s)
+    shared_ptr<JsonBase> JsonParser::parse_bool(CCharArray& s)
     {
         ostringstream os;
-        JsonBoolean res;
+        JsonBoolean* res = new JsonBoolean;
         os << current_char;
         if(current_char == 't')
         {
@@ -395,9 +366,9 @@ namespace TinyJson
                 os << current_char;
             }
             assert(os.str() == "true");
-            res.value = true;
+            res->value = true;
             current_char = s.pop_front();
-            return nodes.addObject(std::move(res));
+            return shared_ptr<JsonBase>(res);
         }
         else if(current_char == 'f')
         {
@@ -407,17 +378,17 @@ namespace TinyJson
                 os << current_char;
             }
             assert(os.str() == "false");
-            res.value = false;
+            res->value = false;
             current_char = s.pop_front();
-            return nodes.addObject(std::move(res));
+            return shared_ptr<JsonBase>(res);
         }
         else
         {
             assert(0);
-            return nullptr;
+            return shared_ptr<JsonBase>(res);
         }
     }
-    JsonNull* JsonParser::parse_null(CCharArray& s)
+    shared_ptr<JsonBase> JsonParser::parse_null(CCharArray& s)
     {
         ostringstream os;
         assert(current_char == 'n');
@@ -427,31 +398,31 @@ namespace TinyJson
             current_char = s.pop_front();
             os << current_char;
         }
-        JsonNull res;
-        res.value = os.str();
-        assert(res.value == "null");
+        JsonNull* res = new JsonNull;
+        res->value = os.str();
+        assert(res->value == "null");
         current_char = s.pop_front();
-        return nodes.addObject(std::move(res));
+        return shared_ptr<JsonBase>(res);
     }
-    JsonString* JsonParser::parse_string(CCharArray& s)
+    shared_ptr<JsonBase> JsonParser::parse_string(CCharArray& s)
     {
         ostringstream os;
-        JsonString res;
+        JsonString* res = new JsonString;
         assert(current_char == '\"');
         while(s.len() > 0)
         {
             current_char = s.pop_front();
             if(current_char == '\"')
             {
-                res.value = os.str();
+                res->value = os.str();
                 current_char = s.pop_front();
-                return nodes.addObject(std::move(res));
+                return shared_ptr<JsonBase>(res);
             }
             os << current_char;
         }
         //error
         assert(0);
-        return nullptr;
+        return shared_ptr<JsonBase>(res);
     }
 };
 
@@ -468,7 +439,6 @@ int main()
     fi.close();
     JsonParser p;
     auto obj = p.parse(test.c_str());
-
     string output = obj->visit();
     ofstream fo;
     fo.open("test", ios::out);
